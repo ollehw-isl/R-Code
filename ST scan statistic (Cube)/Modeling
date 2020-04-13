@@ -1,0 +1,394 @@
+### Date loading
+### x: lot, y:sequence
+### 빈 공간: 0.00000000001, 정상 : 0, 불량 : 1 로 전처리
+lot_load <- function(x,y){
+  z <- c()
+  for (i in 1:y){
+    z <- c(z, paste('lot',x,'_',i,'.csv', sep = ''))
+  }
+  k <- 1
+  lot <- list()
+  for (j in z){
+    temp <- read.csv(j,header = T)
+    temp <- temp[-1]
+    temp <- as.matrix(temp)
+    y <- dim(temp)[1]
+    x <- dim(temp)[2]
+    for (j in 1:y){
+      for (i in 1:x){
+        if (temp[j,i] == 0){
+          temp[j,i] = 0.00000000001
+        }else{
+          temp[j,i] = temp[j,i]-1
+        }
+      }
+    }
+    lot[[k]] <- temp
+    k <- k+1
+  }
+  return(lot)
+}
+
+### Loglikelyhood Ratio를 최대로 가지는 Cube의 크기 계산 
+LR <- function(lot){
+  x_length <- dim(lot[[1]])[2]       ### Wafer 맵의 x축 길이
+  y_length <- dim(lot[[1]])[1]       ### Wafer 맵의 y축 길이
+  z_length <- length(lot)            ### lot의 시퀀스 길이
+  max.x_length <- x_length %/% 2     ### x 축에서의 최대 연장 길이
+  max.y_length <- y_length %/% 2     ### y 축에서의 최대 연장 길이
+  max.z_length <- z_length %/% 2     ### 시간 축에서의 최대 연장 길이
+  bad_num <- round(sum(unlist(lot)))     ### 불량의 수
+  N = bad_num + sum(floor(1-unlist(lot)))
+  good_num <- N - bad_num    ### 양품의 수
+  p_0 <- bad_num/N                  ### 귀무가설하의 평균
+  q_0 <- 1-p_0
+  L_0 <- bad_num*log(p_0) + good_num*log(q_0)
+  
+  lot_unlist <- unlist(lot)
+  LR_matrix <- rep(0, length(lot_unlist))
+  LR_matrix <- split(LR_matrix,ceiling(seq_along(LR_matrix)/(x_length*y_length)))
+  names(LR_matrix) <- NULL
+  for(j in 1:z_length){
+    LR_matrix[[j]] <- matrix(LR_matrix[[j]], nrow = y_length) ### matrix로 변환.
+  }
+  
+  x_plus_matrix <- LR_matrix
+  y_plus_matrix <- LR_matrix
+  z_plus_matrix <- LR_matrix
+  for(z in 1:(z_length-1)){
+    for(y in 1:y_length){
+      for(x in 1:x_length){
+        M_LR <- c()
+        LR_x_plus <- c()
+        LR_y_plus <- c()
+        LR_z_plus <- c()
+        for(z_plus in 1:min(z_length-z, max.z_length)){
+          for(y_plus in 0:min(y_length-y, max.y_length)){
+            for(x_plus in 0:min(x_length-x, max.x_length)){
+              list1 <- lot[z:(z+z_plus)]                               ### 시간 구간 만큼 리스트 뽑기
+              for(k in 1:(z_plus+1)){
+                list1[[k]] <- list1[[k]][y:(y+y_plus), x:(x+x_plus)]     ### cube matrix 구현
+              }
+              if(round(sum(unlist(list1)))<1){
+                M_LR = c(M_LR, 0)             ### 최대값이 될리가 없음.
+                LR_x_plus <- c(LR_x_plus, x_plus)
+                LR_y_plus <- c(LR_y_plus, y_plus)
+                LR_z_plus <- c(LR_z_plus, z_plus)
+              }else {
+                cube_bad_num <- round(sum(unlist(list1)))     ### cube 안 불량의 수
+                N_cube <- sum(floor(1-unlist(list1)))+cube_bad_num ### cube 안 die의 수
+                out_N_cube <- N-N_cube  ### cube 밖 die의 수
+                cube_good_num <- N_cube - cube_bad_num    ### cube 안 양품의 수
+                p_z <- cube_bad_num/N_cube
+                out_cube_bad_num <- bad_num - cube_bad_num        ### cube 밖 불량의 수
+                out_cube_good_num <- good_num - cube_good_num     ### cube 밖 양품의 수
+                p_out <- out_cube_bad_num/out_N_cube
+                if(z_plus < 1){
+                  M_LR <- c(M_LR,0)
+                }else if(N_cube<20){
+                  M_LR <- c(M_LR,0)
+                }else if(p_z == 1){
+                  M_LR <- c(M_LR, 0)
+                }else if(p_z > p_out){
+                  L_z <- cube_bad_num*log(p_z) + cube_good_num*log(1-p_z) + out_cube_bad_num*log(p_out) + out_cube_good_num*log(1-p_out)
+                  M_LR <- c(M_LR,L_z - L_0)
+                }else {
+                  M_LR <- c(M_LR, 0)
+                }
+                LR_x_plus <- c(LR_x_plus, x_plus)
+                LR_y_plus <- c(LR_y_plus, y_plus)
+                LR_z_plus <- c(LR_z_plus, z_plus)
+              }
+            }
+          }
+        }
+        w <- which(M_LR == max(M_LR))
+        LR_matrix[[z]][y,x] <- max(M_LR)
+        x_plus_matrix[[z]][y,x] <- LR_x_plus[w[1]]
+        y_plus_matrix[[z]][y,x] <- LR_y_plus[w[1]]
+        z_plus_matrix[[z]][y,x] <- LR_z_plus[w[1]]
+      }
+    }
+  }
+  result <- list(LR_matrix, x_plus_matrix, y_plus_matrix, z_plus_matrix)
+  return(result)
+}
+
+### 몬테카를로.
+monte <- function(lot,result){
+  x_length <- dim(lot[[1]])[2]       ### Wafer 맵의 x축 길이
+  y_length <- dim(lot[[1]])[1]       ### Wafer 맵의 y축 길이
+  z_length <- length(lot)            ### lot의 시퀀스 길이
+  xy <- x_length*y_length
+  bad_num <- round(sum(unlist(lot)))     ### 불량의 수
+  N = bad_num + sum(floor(1-unlist(lot)))
+  good_num <- N - bad_num    ### 양품의 수
+  good_num <- N - bad_num    ### 양품의 수
+  p_0 <- bad_num/N                  ### 귀무가설하의 평균
+  q_0 <- 1-p_0
+  L_0 <- bad_num*log(p_0) + good_num*log(q_0)
+  lot_unlist <- unlist(lot)
+  p_value <- c(rep(0, xy*(z_length-1)), rep(1000, xy*1))
+  p_value <- split(p_value,ceiling(seq_along(p_value)/(x_length*y_length)))
+  names(p_value) <- NULL
+  for(j in 1:z_length){
+    p_value[[j]] <- matrix(p_value[[j]], nrow = y_length) ### matrix로 변환.
+  }
+  
+  index_all <- which(unlist(lot)!=1e-11)
+  for (i in 1:1000){
+    random_sample <- sample(index_all, bad_num, replace = F)
+    lot_unlist[random_sample] <- 1
+    lot_unlist[setdiff(index_all, random_sample)] <- 0
+    random_lot <- split(lot_unlist,ceiling(seq_along(lot_unlist)/(x_length*y_length)))
+    names(random_lot) <- NULL
+    for(j in 1:z_length){
+      random_lot[[j]] <- matrix(random_lot[[j]], nrow = y_length) ### matrix로 변환.
+    }
+    for(z in 1:(z_length-1)){
+      for(y in 1:y_length){
+        for(x in 1:x_length){
+          x_plus <- result[[2]][[z]][y,x]     ### x 구간
+          y_plus <- result[[3]][[z]][y,x]     ### y 구간
+          z_plus <- result[[4]][[z]][y,x]     ### z 구간
+          list1 <- random_lot[z:(z+z_plus)]                               ### 시간 구간 만큼 리스트 뽑기
+          for(k in 1:(z_plus+1)){
+            list1[[k]] <- list1[[k]][y:(y+y_plus), x:(x+x_plus)]     ### cube matrix 구현
+          }
+          if(round(sum(unlist(list1)))<1){
+            M_LR = 0             ### 최대값이 될리가 없음.
+          }else {
+            cube_bad_num <- round(sum(unlist(list1)))     ### cube 안 불량의 수
+            N_cube <- sum(floor(1-unlist(list1)))+cube_bad_num ### cube 안 die의 수
+            out_N_cube <- N-N_cube  ### cube 밖 die의 수
+            cube_good_num <- N_cube - cube_bad_num    ### cube 안 양품의 수
+            p_z <- cube_bad_num/N_cube
+            out_cube_bad_num <- bad_num - cube_bad_num        ### cube 밖 불량의 수
+            out_cube_good_num <- good_num - cube_good_num     ### cube 밖 양품의 수
+            p_out <- out_cube_bad_num/out_N_cube
+            if(z_plus < 1){
+              M_LR <- 0
+            }else if(N_cube<20){
+              M_LR <- 0
+            }else if(p_z == 1){
+              M_LR <- 0
+            }else if(p_z > p_out) {
+              L_z <- cube_bad_num*log(p_z) + cube_good_num*log(1-p_z) + out_cube_bad_num*log(p_out) + out_cube_good_num*log(1-p_out)
+              M_LR <- L_z - L_0
+            }else {
+              M_LR <- 0
+            }
+          }
+          if (M_LR >= result[[1]][[z]][y,x]){
+            p_value[[z]][y,x] <- p_value[[z]][y,x] + 1
+          }
+        }
+      }
+    }
+  }
+  return(p_value)
+}
+
+#### 인덱스
+index_finder <- function(lot, result, monte_result){
+  x_length <- dim(lot[[1]])[2]       ### Wafer 맵의 x축 길이
+  y_length <- dim(lot[[1]])[1]       ### Wafer 맵의 y축 길이
+  z_length <- length(lot)            ### lot의 시퀀스 길이
+  xy = x_length*y_length
+  k=1
+  xyz_total <- list()
+  num <- sum(unlist(monte_result)<5)
+  i=1
+  
+  while (k < (num)){
+    a=1000
+    index <- which(unlist(result[[1]]) == unlist(result[[1]])[order(unlist(result[[1]]), decreasing = T)[i]])
+    if(length(index) == 1){
+      ind <- index
+      z <- ind %/% xy + 1
+      residual <- ind %% xy
+      x = residual %/% y_length + 1
+      y = residual %% y_length
+      if(y==0){
+        y=y_length
+        x = x-1
+      }
+      x_total <- x:(x + result[[2]][[z]][y,x])
+      y_total <- y:(y + result[[3]][[z]][y,x])
+      z_total <- z:(z + result[[4]][[z]][y,x])
+      total <- list(x_total,y_total,z_total)
+      xyz_total[[k]] <- total
+      k = k+1
+      i = i+1
+    }else{
+      for (ind in index){
+        z <- ind %/% xy + 1
+        residual <- ind %% xy
+        x = residual %/% y_length + 1
+        y = residual %% y_length
+        if(y==0){
+          y=y_length
+          x= x-1
+        }
+        if(result[[2]][[z]][y,x]+result[[3]][[z]][y,x]+result[[4]][[z]][y,x] < a){
+          x_total <- x:(x + result[[2]][[z]][y,x])
+          y_total <- y:(y + result[[3]][[z]][y,x])
+          z_total <- z:(z + result[[4]][[z]][y,x])
+          total <- list(x_total,y_total,z_total)
+          xyz_total[[k]] <- total
+          a = result[[2]][[z]][y,x]+result[[3]][[z]][y,x]+result[[4]][[z]][y,x]
+        }
+        
+      }
+      k = k+1
+      i = i+1
+    }
+    
+  }
+  for(i in 1:(length(xyz_total)-1)){
+    if(length(xyz_total[[i]]) > 2){
+      for(j in (i+1):length(xyz_total)){
+        if(length(xyz_total[[j]]) > 2){
+          if(length(intersect(xyz_total[[i]][[1]], xyz_total[[j]][[1]]))  > 0 & 
+             length(intersect(xyz_total[[i]][[2]], xyz_total[[j]][[2]]))  > 0 &
+             length(intersect(xyz_total[[i]][[3]], xyz_total[[j]][[3]]))  > 0){
+            xyz_total[[j]] <- 0
+          } 
+        }
+      }
+    }
+  }
+  
+  xyz_total1 <- list()
+  t=1
+  for (i in 1:length(xyz_total)){
+    if(length(xyz_total[[i]])>2){
+      xyz_total1[[t]] <- xyz_total[[i]]
+      t = t+1
+    }
+  }
+  return(xyz_total1)
+}
+
+
+### 시각화.
+library(rgl)
+cube_visualization <- function(lot, cube_index_lot, k){
+  x_length <- dim(lot[[1]])[2]       ### Wafer 맵의 x축 길이
+  y_length <- dim(lot[[1]])[1]       ### Wafer 맵의 y축 길이
+  z_length <- length(lot)            ### lot의 시퀀스 길이
+  xy = x_length*y_length
+  bad_lot <- unlist(lot)
+  bad_lot <- ifelse(bad_lot == 1, 1, 0)
+  bad_index <- which(bad_lot == 1)
+  x <- c()
+  y <- c()
+  z <- c()
+  for (ind in bad_index){
+    z_temp <- ind %/% xy + 1
+    residual <- ind %% xy
+    x_temp = residual %/% y_length + 1
+    y_temp = residual %% y_length
+    if(y_temp==0){
+      y_temp = y_length
+      x_temp = x_temp-1
+    }
+    z <- c(z, z_temp)
+    y <- c(y, y_temp)
+    x <- c(x, x_temp)
+  }
+  plot3d(x,y,z, type="p", col="red", xlab="x", ylab="y", zlab="z", site=5, lwd=15)
+  i=2
+  for(i in 1:min(length(cube_index_lot), k)){
+    x_range <- cube_index_lot[[i]][[1]]
+    y_range <- cube_index_lot[[i]][[2]]
+    z_range <- cube_index_lot[[i]][[3]]
+    x_len <- max(x_range)-min(x_range) + 1
+    y_len <- max(y_range)-min(y_range) + 1
+    z_len <- max(z_range)-min(z_range) + 1
+    x_center <- (max(x_range)+min(x_range))/2
+    y_center <- (max(y_range)+min(y_range))/2
+    z_center <- (max(z_range)+min(z_range))/2
+    
+    c3d3 <- cube3d(color = "blue", alpha = 0.3) %>% 
+      scale3d(x_len, y_len, z_len) %>%
+      scale3d(0.5,0.5,0.5) %>%
+      translate3d(x_center, y_center, z_center)  
+    shade3d(c3d3)
+  }
+}
+
+
+### 큐브 내부만 보기
+cube_visualization_inside <- function(lot, cube_index_lot, k){
+  x_length <- dim(lot[[1]])[2]       ### Wafer 맵의 x축 길이
+  y_length <- dim(lot[[1]])[1]       ### Wafer 맵의 y축 길이
+  z_length <- length(lot)            ### lot의 시퀀스 길이
+  xy = x_length*y_length
+  
+  zero_list <- list()
+  for (i in 1:z_length){
+    zero_list[[i]] <- matrix(rep(0, xy), nrow = y_length)
+  }
+  
+  x_range <- list()
+  y_range <- list()
+  z_range <- list()
+  
+  for(i in 1:min(length(cube_index_lot), k)){
+    x_range[[i]] <- cube_index_lot[[i]][[1]]
+    y_range[[i]] <- cube_index_lot[[i]][[2]]
+    z_range[[i]] <- cube_index_lot[[i]][[3]]
+  }
+  
+  for (i in 1:length(x_range)){
+    for (z1 in z_range[[i]]){
+      for (y1 in y_range[[i]]){
+        for (x1 in x_range[[i]]){
+          zero_list[[z1]][y1,x1] <- lot[[z1]][y1,x1]
+        }
+      }
+    }
+  }
+  bad_lot <- unlist(zero_list)
+  bad_lot <- ifelse(bad_lot == 1, 1, 0)
+  bad_index <- which(bad_lot == 1)
+  x <- c()
+  y <- c()
+  z <- c()
+  for (ind in bad_index){
+    z_temp <- ind %/% xy + 1
+    residual <- ind %% xy
+    x_temp = residual %/% y_length + 1
+    y_temp = residual %% y_length
+    if(y_temp==0){
+      y_temp = y_length
+      x_temp = x_temp-1
+    }
+    z <- c(z, z_temp)
+    y <- c(y, y_temp)
+    x <- c(x, x_temp)
+  }
+  
+  
+  plot3d(x,y,z, type="p", col="red", xlab="x", ylab="y", zlab="z", xlim = c(0, x_length), ylim = c(0, y_length), zlim = c(0, z_length), site=5, lwd=15)
+  
+  for(i in 1:min(length(cube_index_lot), k)){
+    x_range <- cube_index_lot[[i]][[1]]
+    y_range <- cube_index_lot[[i]][[2]]
+    z_range <- cube_index_lot[[i]][[3]]
+    x_len <- max(x_range)-min(x_range) + 1
+    y_len <- max(y_range)-min(y_range) + 1
+    z_len <- max(z_range)-min(z_range) + 1
+    x_center <- (max(x_range)+min(x_range))/2
+    y_center <- (max(y_range)+min(y_range))/2
+    z_center <- (max(z_range)+min(z_range))/2
+    print(z_range)
+    c3d3 <- cube3d(color = "blue", alpha = 0.3) %>% 
+      scale3d(x_len, y_len, z_len) %>%
+      scale3d(0.5,0.5,0.5) %>%
+      translate3d(x_center, y_center, z_center)  
+    shade3d(c3d3)
+  }
+}
+
