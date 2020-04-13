@@ -1,0 +1,76 @@
+#### 패키지
+library(spgwr)
+library(ggplot2)
+library(maptools)
+
+
+#### 데이터 불러오기
+Geogia <- read.csv("GData_utm.csv")
+colnames(Geogia)
+
+
+
+#### 일반적인 회귀모델
+attach(Geogia)
+
+model1 <- lm(PctBach ~ TotPop90 + PctRural + PctBlack + PctEld + PctFB + PctPov)
+summary(model1)
+
+
+
+#### 등분산성 및 지역별 Residual 분포
+plot(model1, which=3)
+
+resids<-residuals(model1)
+colours <- c("dark blue", "blue", "red", "dark red") 
+#here it is assumed that your eastings and northings coordinates are stored in columns called x and y in your dataframe
+map.resids <- SpatialPointsDataFrame(data=data.frame(resids), coords=cbind(Geogia$X,Geogia$Y)) 
+#for speed we are just going to use the quick sp plot function, but you could alternatively store your residuals back in your LondonWards dataframe and plot using geom_point in ggplot2
+
+spplot(map.resids, cuts=quantile(resids), col.regions=colours, cex=1) 
+
+
+
+#### GWR bandwidth and model fitting
+GWRbandwidth <- gwr.sel(PctBach ~ TotPop90 + PctRural + PctBlack + PctEld + PctFB + PctPov, coords=cbind(X,Y),adapt=T, data = Geogia) 
+#run the gwr model
+gwr.model = gwr(PctBach ~ TotPop90 + PctRural + PctBlack + PctEld + PctFB + PctPov, coords=cbind(X,Y), adapt=GWRbandwidth, hatmatrix=TRUE, se.fit=TRUE, data = Geogia) 
+#print the results of the model
+gwr.model
+
+
+
+#### Visualization
+results<-as.data.frame(gwr.model$SDF)
+head(results)
+
+#attach coefficients to original dataframe
+Geogia$coefTotPop90<-results$TotPop90
+Geogia$coefPctRural<-results$PctRural
+Geogia$coefPctBlack<-results$PctBlack
+
+shp_map <- readShapePoly("G_utm.shp")
+shp_map_line <- fortify(shp_map)
+
+#now plot the various GWR coefficients                       
+gwr.point1<-ggplot(Geogia, aes(x=X,y=Y))+geom_point(aes(colour=Geogia$coefTotPop90))+scale_colour_gradient2(low = "red", mid = "white", high = "blue", midpoint = median(Geogia$coefTotPop90), space = "rgb", na.value = "grey50", guide = "colourbar", guide_legend(title="Coefs"))
+gwr.point1+geom_path(data=shp_map_line,aes(long, lat, group=id), colour="grey")+coord_equal() + labs(title = "TotPop90") + theme(plot.title = element_text(hjust = 0.5))
+
+gwr.point1<-ggplot(Geogia, aes(x=X,y=Y))+geom_point(aes(colour=Geogia$PctRural))+scale_colour_gradient2(low = "red", mid = "white", high = "blue", midpoint = median(Geogia$PctRural), space = "rgb", na.value = "grey50", guide = "colourbar", guide_legend(title="Coefs"))
+gwr.point1+geom_path(data=shp_map_line,aes(long, lat, group=id), colour="grey")+coord_equal()+ labs(title = "PctRural") + theme(plot.title = element_text(hjust = 0.5))
+
+gwr.point1<-ggplot(Geogia, aes(x=X,y=Y))+geom_point(aes(colour=Geogia$PctBlack))+scale_colour_gradient2(low = "red", mid = "white", high = "blue", midpoint = median(Geogia$PctBlack), space = "rgb", na.value = "grey50", guide = "colourbar", guide_legend(title="Coefs"))
+gwr.point1+geom_path(data=shp_map_line,aes(long, lat, group=id), colour="grey")+coord_equal()+ labs(title = "PctBlack") + theme(plot.title = element_text(hjust = 0.5))
+
+
+
+
+#### GWPR
+Tokyo = read.csv('Tokyomortality.csv')
+colnames(Tokyo)
+## bandwidth
+GWPRbandwidth <- ggwr.sel(db2564 ~ eb2564 + OCC_TEC + OWNH + POP65 + UNEMP , coords=cbind(Tokyo$X_CENTROID,Tokyo$Y_CENTROID),adapt=T, data = Tokyo) 
+#run the gwr model
+gwr.model = ggwr(db2564 ~ eb2564 + OCC_TEC + OWNH + POP65 + UNEMP , coords=cbind(Tokyo$X_CENTROID,Tokyo$Y_CENTROID), adapt=GWPRbandwidth, data = Tokyo, family=poisson()) 
+#print the results of the model
+gwr.model
