@@ -1,0 +1,171 @@
+### Min-max
+min_max = function(x){
+  return(round((x - min(x))/(max(x)-min(x)),6))
+}
+
+### Numerical attribute Min-man function
+Numerical_min_max = function(dataset){
+  Numeric_df = dataset[,!sapply(dataset, is.factor)]
+  Categorical_df = dataset[,sapply(dataset, is.factor)]
+  Numeric_df = sapply(Numeric_df, min_max)
+  return(cbind(Numeric_df, Categorical_df))
+}
+
+
+### Factorization
+Factorization = function(x,interval){
+  interval_list = round((c(0:interval)/interval),5) - 0.00001
+  interval_list[interval+1] = 1.01
+  for(i in 1:interval){
+    x = ifelse(x < interval_list[i+1], i+1, x)
+  }
+  Number = c("First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Nineth", "Tenth")
+  y = c()
+  for(i in 1:length(x)){
+    y = c(y, Number[(x[i]-1)])
+  }
+  y = factor(y)
+  return(y)
+}
+
+### Discretization
+Discretization = function(dataset, interval){
+  Numeric_df = dataset[,!sapply(dataset, is.factor)]
+  Categorical_df = dataset[,sapply(dataset, is.factor)]
+  for(i in 1:length(Numeric_df)){
+    Numeric_df[,i] = Factorization(Numeric_df[,i], interval)
+  }
+  return(cbind(Numeric_df, Categorical_df))
+}
+
+
+
+
+### Find_max
+# attribute1, attribute2 : column
+# category1, category2 : category in attribute1
+# v_j : # of categories in attribute2
+# u_i : i th category in attribute2
+# p1 : P(u_i/category1), p2 : P(u_i/category2) 
+
+Find_max = function(attribute1, attribute2, category1, category2){
+  v_j = length(levels(attribute2))
+  distance = 0
+  category1_index = which(attribute1 == category1)
+  category2_index = which(attribute1 == category2)
+  category1_count = length(category1_index)
+  category2_count = length(category2_index)
+  
+  for (i in 1:v_j){
+    u_i = levels(attribute2)[i]
+    category_u_index = which(attribute2 == u_i)
+    p1 = length(intersect(category1_index, category_u_index))/category1_count
+    p2 = length(intersect(category2_index, category_u_index))/category2_count
+    if (p1 >= p2){                 ### u_i occurs more frequently with category1 than with category2
+      distance = distance + p1
+    }else {
+      distance = distance + p2
+    }
+  }
+  return(distance - 1)
+}
+
+### Algo_distance
+
+Algo_distance = function(dataset){
+  attribute_list = 1:length(dataset)
+  result_list = list()
+  for (i in 1:length(dataset)){
+    attribute1 = dataset[,i]
+    attribute1_length = length(levels(attribute1))
+    result_list[[i]] = matrix(rep(0, attribute1_length*attribute1_length), nrow = attribute1_length)
+    colnames(result_list[[i]]) = levels(attribute1)
+    rownames(result_list[[i]]) = levels(attribute1)
+    attribute_list_remove = attribute_list[-i]
+    for (c1 in 1:(attribute1_length-1)){
+      category1 = levels(attribute1)[c1]
+      for (c2 in (c1+1):attribute1_length){
+        category2 = levels(attribute1)[c2]
+        Sum = 0
+        for (j in attribute_list_remove){
+          attribute2 = dataset[,j]
+          Sum = Sum + Find_max(attribute1 = attribute1, attribute2 = attribute2, category1 = category1, category2 = category2)
+        }
+        result_list[[i]][c1,c2] = Sum/(length(attribute_list_remove))
+        result_list[[i]][c2,c1] = Sum/(length(attribute_list_remove))
+      }
+    }
+  }
+  names(result_list) = colnames(dataset)
+  return(result_list)
+}
+
+### Weight function
+Weight = function(distance_list){
+  attribute_length = length(distance_list)
+  w = c()
+  for(i in 1:attribute_length){
+    category_length = dim(distance_list[[i]])[1]
+    w_i = sum(distance_list[[i]])/2
+    w_i = w_i/(category_length*(category_length-1)/2)
+    w = c(w, w_i)
+  }
+  return(w)
+}
+
+### Distance Function
+# dataset: not discreted dataset
+Distance = function(dataset, weight_vector, distance_by_factor){
+  Numeric_df = dataset[,!sapply(dataset, is.factor)]
+  Categorical_df = dataset[,sapply(dataset, is.factor)]
+  Numeric_attributes = length(Numeric_df)
+  Categorical_attributes = length(Categorical_df)
+  Numeric_attributes_weights = weight_vector[1:Numeric_attributes]
+  observation_length = length(Numeric_df[,1])
+  Distance_matrix = matrix(rep(0, observation_length*observation_length), nrow = observation_length)
+  for(i in 1:(observation_length-1)){
+    observation1_Numeric = Numeric_df[i,]
+    observation1_Categorical = Categorical_df[i,]
+    for(j in (i+1):observation_length){
+      observation2_Numeric = Numeric_df[j,]
+      observation2_Categorical = Categorical_df[j,]
+      Numeric_Sum = 0
+      Categorical_Sum = 0
+      for(a1 in 1:Numeric_attributes){
+        Numeric_Sum = Numeric_Sum + (Numeric_attributes_weights[a1]*(Numeric_df[i,a1]-Numeric_df[j,a1]))^2
+      }
+      for(a2 in 1:Categorical_attributes){
+        Categorical_attributes_index = a2 + Numeric_attributes
+        i_index = which(colnames(distance_by_factor[[Categorical_attributes_index]]) == Categorical_df[i,a2])
+        j_index = which(colnames(distance_by_factor[[Categorical_attributes_index]]) == Categorical_df[j,a2])
+        Categorical_Sum = Categorical_Sum + (distance_by_factor[[Categorical_attributes_index]][i_index,j_index])^2
+      }
+      Distance_matrix[i,j] = Numeric_Sum + Categorical_Sum
+      Distance_matrix[j,i] = Distance_matrix[i,j]
+    }
+  }
+  return(Distance_matrix)
+}
+
+### Exercise 1
+Exercise = data.frame(Director = c('Scorsese', 'Coppola', 'Hitchcock', 'Hitchcock', 'Koster', 'Koster'),
+                      Actor = c('De Niro', 'De Niro', 'Stewart', 'Grant', 'Grant', 'Stewart'),
+                      Genre = c('Crime', 'Crime', 'Thriller', 'Thriller', 'Comedy', 'Comedy'))
+Exercise$Director = factor(Exercise$Director)
+Exercise$Actor = factor(Exercise$Actor)
+Exercise$Genre = factor(Exercise$Genre)
+result = Algo_distance(Exercise)
+weight_exercise = Weight(result)
+
+### Exercise 2
+loan_2012_exercise = loan_2012[1:200, 8:16]
+loan_2012_exercise_for_graph = Numerical_min_max(loan_2012_exercise)
+loan_2012_exercise_for_graph$emp_length = factor(as.character(loan_2012_exercise_for_graph$emp_length))
+loan_2012_exercise_for_graph$grade = factor(as.character(loan_2012_exercise_for_graph$grade))
+loan_2012_exercise_for_graph$purpose = factor(as.character(loan_2012_exercise_for_graph$purpose))
+loan_2012_exercise_for_graph_discreted = Discretization(loan_2012_exercise_for_graph, interval = 3)
+
+distance_by_factor_exercise = Algo_distance(loan_2012_exercise_for_graph_discreted)
+weight_vector_exercise = Weight(distance_by_factor_exercise)
+distance_matrix_exercise = Distance(loan_2012_exercise_for_graph, weight_vector_exercise, distance_by_factor_exercise)
+
