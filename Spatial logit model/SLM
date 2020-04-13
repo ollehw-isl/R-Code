@@ -1,0 +1,210 @@
+
+for(q in 54:100){
+  ### Train
+  if(is.na(test_sample[[q]])){
+    next
+  }
+  train_loan_2012_sample = loan_2012_sample[c(train_sample[[q]]),]
+  train_loan_2012_sample_normalized = Numerical_min_max(train_loan_2012_sample)
+  
+  ### Train W matrix 정의
+  W = matrix(rep(0, length(c(train_sample[[q]]))*length(c(train_sample[[q]]))), nrow = length(c(train_sample[[q]])))
+  for(i in 1:length(c(full_paid_sampling2, default_sampling2))){
+    W[i,] = W_mat[c(train_sample[[q]])[i], c(train_sample[[q]])]
+  }
+  
+  for(i in 1:nrow(W)){
+    row_temp = W[i,]
+    row_temp = row_temp/sum(row_temp)
+    W[i,] = row_temp
+  }
+  
+  ### y 와 X 정의하기.
+  y = train_loan_2012_sample$loan_status
+  y = ifelse(y == "Fully Paid", 0, 1)
+  
+  X = model.matrix(loan_status~.,train_loan_2012_sample_normalized)
+  temp1=c()
+  for (i in 1:length(X[,1])){
+    temp = X[i,]
+    names(temp) = NULL
+    temp1 = c(temp1, temp)
+  }
+  X = matrix(temp1, byrow = T, nrow = length(X[,1]))
+  
+  ### 초기 r0 값 찾기
+  rho = 0.2
+  B <- -rho * W
+  diag(B) <- 1
+  A <- solve(B)
+  v <- sqrt(diag(A %*% t(A)))
+  X_star = X/v
+  Z <- cbind(X, W %*% X, W %*% W %*% X, W %*% W %*% W %*% X)
+  
+  theta = c(rnorm(length(X[1,])))
+  opti_fun <- function(theta, Z, y, A, X_star)
+  {
+    n <- nrow(X)
+    beta <- theta
+    Xb <- A %*% X_star %*% beta
+    P = exp(Xb)/(1+exp(Xb))
+    u <- y - P
+    S <- 1/n * t(Z) %*% u
+    Q <- t(S) %*% S
+    print(as.numeric(Q))
+    (as.numeric(Q))
+  }
+  
+  ## Optimization
+  opt_method = 'BFGS'
+  Out <- optimx(par = theta, fn=opti_fun,
+                method = opt_method,
+                control=list(save.failures=TRUE, maxit=100, trace = 3, reltol = 1e-6),
+                X_star = X_star,  Z = Z, A = A, y = y)
+  if (Out$value >0.001){
+    beta_list_2[[q]] = NA
+    sam_model_v1_2[[q]] = NA
+    sam_model_v2_2[[q]] = NA
+    next
+  }
+  beta = unlist(Out[1:length(X[1,])])
+  attributes(beta) = NULL
+  Out$value
+  ### Validation 2
+  opti_fun <- function(rho,beta, Z, y, A, X_star)
+  {
+    print(rho)
+    B <- -rho * W
+    diag(B) <- 1
+    A <- solve(B)
+    v <- sqrt(diag(A %*% t(A)))
+    X_star = X/v
+    n <- nrow(X)
+    Xb <- A %*% X_star %*% beta
+    P = exp(Xb)/(1+exp(Xb))
+    u <- y - P
+    S <- 1/n * t(Z) %*% u
+    Q <- t(S) %*% S
+    print(as.numeric(Q))
+    (as.numeric(Q))
+  }
+  
+  ## Optimization
+  opt_method = 'BFGS'
+  Out <- optimx(par = rho, fn=opti_fun,
+                method = opt_method,
+                control=list(save.failures=TRUE, maxit=100, trace = 3, reltol = 1e-6),
+                X_star = X_star, beta = beta,  Z = Z, A = A, y = y)
+  rho = unlist(Out[1])
+  attributes(beta) = NULL
+  
+  beta_list_2[[q]] = c(beta, rho)
+  
+  
+  ### Test
+  ### Validation (Baseline)
+  train_loan_2012_sample_normalized$loan_status = ifelse(train_loan_2012_sample_normalized$loan_status == 'Fully Paid', 0, 1)
+  train_loan_2012_sample_normalized$loan_status = factor(train_loan_2012_sample_normalized$loan_status)
+  
+  test_loan_2012_sample = loan_2012_sample[test_sample[[q]],]
+  
+  ### Min max
+  test_loan_2012_sample_normalized = test_loan_2012_sample
+  for(i in 1:7){
+    min_temp = min(train_loan_2012_sample[,i])
+    max_temp = max(train_loan_2012_sample[,i])
+    test_loan_2012_sample_normalized[,i] = (test_loan_2012_sample_normalized[,i]-min_temp)/(max_temp-min_temp)
+  }
+  
+  test_loan_2012_sample_normalized$loan_status = ifelse(test_loan_2012_sample_normalized$loan_status == 'Fully Paid', 0, 1)
+  test_loan_2012_sample_normalized$loan_status = factor(test_loan_2012_sample_normalized$loan_status)
+  
+  
+  ### Test W matrix 정의
+  W_test = matrix(rep(0, length(c(train_sample[[q]],test_sample[[q]]))*length(c(train_sample[[q]],test_sample[[q]]))), nrow = length(c(train_sample[[q]],test_sample[[q]])))
+  for(i in 1:length(c(train_sample[[q]],test_sample[[q]]))){
+    W_test[i,] = W_mat[c(train_sample[[q]],test_sample[[q]])[i], c(train_sample[[q]],test_sample[[q]])]
+  }
+  for(i in 1:nrow(W_test)){
+    row_temp = W_test[i,]
+    row_temp = row_temp/sum(row_temp)
+    W_test[i,] = row_temp
+  }
+  
+  ### Validation 1
+  # Y_o 정의
+  Y_o = test_loan_2012_sample$loan_status
+  Y_o = ifelse(Y_o == 'Fully Paid', 0, 1)
+  Y_o = factor(Y_o)
+  
+  
+  # X_o 정의
+  X_o = model.matrix(loan_status~.,test_loan_2012_sample_normalized)
+  temp1=c()
+  for (i in 1:length(X_o[,1])){
+    temp = X_o[i,]
+    names(temp) = NULL
+    temp1 = c(temp1, temp)
+  }
+  X_o = matrix(temp1, byrow = T, nrow = length(X_o[,1]))
+  
+  # 예측1
+  y_hat = rho*W_test[(2*train_sample_size+1):(2*(train_sample_size + test_sample_size)), 1:(2*train_sample_size)]%*%y
+  y_hat = y_hat + X_o %*% beta
+  y_hat_exp = exp(y_hat)/(1+exp(y_hat))
+  pr <- prediction(y_hat_exp, test_loan_2012_sample_normalized$loan_status)
+  auc <- performance(pr, measure = "auc")
+  auc2 <- auc@y.values[[1]]
+  
+  
+  y_hat = ifelse(y_hat>0, 1, 0)
+  table(y_hat)
+  y_hat = factor(y_hat)
+  
+  accuracy = confusionMatrix(y_hat, Y_o)$overall['Accuracy'] 
+  names(accuracy) = NULL
+  precision <- posPredValue(y_hat, Y_o, positive="1")
+  recall <- sensitivity(y_hat, Y_o, positive="1")
+  F1 <- (2 * precision * recall) / (precision + recall)
+  sam_model_v1_2[[q]] = c(accuracy, precision, recall, F1, auc2)
+  
+  
+  
+  # 예측2
+  A = W_test[1:(2*train_sample_size), 1:(2*train_sample_size)]
+  A <- -rho * A
+  diag(A) <- 1
+  A_inv <- solve(A)
+  
+  B = W_test[1:(2*train_sample_size), (2*train_sample_size+1):(2*(train_sample_size + test_sample_size))]
+  B <- -rho * B
+  
+  C = W_test[(2*train_sample_size+1):(2*(train_sample_size + test_sample_size)), 1:(2*train_sample_size)]
+  C <- -rho * C
+  
+  D = W_test[(2*train_sample_size+1):(2*(train_sample_size + test_sample_size)), (2*train_sample_size+1):(2*(train_sample_size + test_sample_size))]
+  D <- -rho * D
+  diag(D) <- 1
+  
+  temp_matrix = solve(D-(C%*%A_inv%*%B))
+  Y_hat = -temp_matrix%*%C%*%A_inv%*%X%*%beta + temp_matrix%*%X_o%*%beta
+  Y_hat_exp = exp(Y_hat)/(1+exp(Y_hat))
+  pr <- prediction(Y_hat_exp, test_loan_2012_sample_normalized$loan_status)
+  auc <- performance(pr, measure = "auc")
+  auc3 <- auc@y.values[[1]]
+  
+  
+  Y_hat = ifelse(Y_hat>0, 1, 0)
+  table(Y_hat)
+  Y_hat = factor(Y_hat)
+  
+  
+  accuracy = confusionMatrix(Y_hat, Y_o)$overall['Accuracy'] 
+  names(accuracy) = NULL
+  precision <- posPredValue(Y_hat, Y_o, positive="1")
+  recall <- sensitivity(Y_hat, Y_o, positive="1")
+  F1 <- (2 * precision * recall) / (precision + recall)
+  sam_model_v2_2[[q]] = c(accuracy, precision, recall, F1, auc3)
+  
+}
+
